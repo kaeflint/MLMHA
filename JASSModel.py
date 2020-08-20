@@ -6,10 +6,13 @@
 #from  beamsV22 import *
 '''
 Instead of performing the source-target attention across the top-level encoder layer, 
-We propose the Transformer model with Multi-layer Multi-head Attention (MLMHA)
-The encoder returns the source representations from the top_n layer.
-These are then passed to the decoding subnetwork where the source-target attention operations 
-is performed across the representations from encoder subnetwork
+We propose a Transformer model with Multi-layer Multi-head Attention (MLMHA)
+MLMAH employs different joint attention strategies to leverage the multiple source representations
+Approach:
+    The encoder returns the source representations from the top_n layer.
+    These are then passed to the decoding subnetwork where the source-target attention operations 
+    are jointly performed across the representations from encoder subnetwork. The goal is to provide the
+    decoder a more direct access to the encoding layers which improves the flow of gradient information.
 '''
 from layers.attention import *
 from layers.networkcomponents import *
@@ -50,12 +53,8 @@ class EncoderStack(tf.keras.layers.Layer):
     def build(self, input_shape):
         """Builds the encoder stack."""
         params = self.params
-        # Create final layer normalization layer.
         #Create the final normalization layer for each vector within the range determined by self.last_n
         self.output_normalizations=[LayerNormalization(params["hidden_size"]) for _ in range(self.last_n)]
-        if self.multi_attention_mode in [6]:
-            self.convert_representation = tf.keras.Dense(params["hidden_size"],)
-            self.normalize_convert = LayerNormalization(params["hidden_size"])
         for _ in range(params["num_hidden_layers"]):
             # Create sublayers for each layer.
             self_attention_layer = SelfAttention(
@@ -76,15 +75,15 @@ class EncoderStack(tf.keras.layers.Layer):
     def call(self, encoder_inputs, attention_bias, inputs_padding, training,return_attention=False):
         """Return the output of the encoder layer stacks.
         Args:
-          encoder_inputs: tensor with shape [batch_size, input_length, hidden_size]
+          encoder_inputs: tensor with shape [batch_size, input_seq_length, hidden_size]
           attention_bias: bias for the encoder self-attention layer. [batch_size, 1,
-            1, input_length]
-          inputs_padding: tensor with shape [batch_size, input_length], inputs with
+            1, input_seq_length]
+          inputs_padding: tensor with shape [batch_size, input_seq_lengthh], inputs with
             zero paddings.
           training: boolean, whether in training mode or not.
         Returns:
           Output of encoder layer stack.
-          float32 tensor with shape [batch_size, input_length, hidden_size]
+          top_n float32 tensors each  with shape [batch_size, input_seq_length, hidden_size]
         """
         outputs = [encoder_inputs]
         ##Initialize the self attention dictionary
@@ -278,16 +277,13 @@ class JASSTransformer(tf.keras.layers.Layer):
         self.embedding_softmax_layer = EmbeddingSharedWeights(params["vocab_size"], 
                                                               params['d_model'], dtype=params['dtype'])
         
-        #output_choices = params['aux_layers_@'][:]
-        #Get the encoder layer indices to attach the decoders
-        
-        #self.aux_layer_indices = aux_layer_indices
-        
-        self.encoder_stack = EncoderStack(params) #if not params['with_layer_position_embedding']  else EncoderStackWLayerEmbedding(params)
+        #Define the encoding subnetwork
+        self.encoder_stack = EncoderStack(params) 
         self.params["hidden_size"] = params['d_model']
         
-        #self.choices= self.encoder_stack.output_choices
-        self.attention_weights = {}
+        
+        self.attention_weights = {} #Keeps track of the attention weights for visualization during the target generation
+        #Define the decoder subnetwork
         decoder_params = copy.deepcopy(params)
         self.decoder_stack = DecoderStack(decoder_params)
     
